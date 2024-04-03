@@ -1,0 +1,489 @@
+---
+title: "Predicting Churn at QWE"
+author: "Alex Osterbuhr"
+date: "2023-09-01"
+output: html_document
+---
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+# Clean out the environment
+rm(list = ls())
+# Set your working directory
+#setwd("~/Google Drive/My Drive/Teaching/MSBA70550.Marketing.Analytics/Assignments/Week 3/")
+options(scipen=999)
+# Load required packages
+if (!require(tidyverse)) {
+  install.packages('tidyverse')
+}
+if (!require(readxl)) {
+  install.packages('readxl')
+}
+if (!require(frequency)) {
+  install.packages('frequency')
+}
+if (!require(corrplot)) {
+  install.packages('corrplot')
+}
+if (!require(NbClust)) {
+  install.packages('NbClust')
+}
+if (!require(factoextra)) {
+  install.packages('factoextra')
+}
+if (!require(mclust)) {
+  install.packages('mclust')
+}
+if (!require(scales)) {
+  install.packages('scales')
+}
+if (!require(stats)) {
+  install.packages('stats')
+}
+if (!require(caret)) {
+  install.packages('caret')
+}
+if (!require(MLmetrics)) {
+  install.packages('MLmetrics')
+}
+# Add other packages as necessary
+library(tidyverse)
+library(readxl)
+library(frequency)
+library(corrplot)
+library(NbClust)
+library(factoextra)
+library(mclust)
+library(scales)
+library(stats)
+library(caret)
+library(MLmetrics)
+```
+# Preparation:
+This document showcases analysis I ran to predict customer churn based on a variety of different data features.
+
+### Data Import & Cleanse:
+```{r}
+qwe_data <- read_excel("Predicting Customer Church at QWE Inc.xlsx", sheet=2)
+
+table(qwe_data$`Churn (1 = Yes, 0 = No)`)
+head(qwe_data)
+summary(qwe_data)
+str(qwe_data)
+corrplot(cor(qwe_data))
+```
+```{r}
+churn_avg <- qwe_data %>% 
+  group_by(`Customer Age (in months)`) %>% 
+  summarize(churn_avg_age = mean(`Churn (1 = Yes, 0 = No)`))
+
+qwe_data <- qwe_data %>% 
+ mutate(no_churn = (`Churn (1 = Yes, 0 = No)`==0)) %>% 
+ mutate(yes_churn = (`Churn (1 = Yes, 0 = No)`==1))
+
+qwe_data$ID <- as.factor(qwe_data$ID)
+```
+
+### Create a graph summarizing average churn by customer age.
+Bar graph shows trend line. 
+```{r, warning=FALSE, message=FALSE}
+churn_avg %>% 
+  ggplot(aes(x= `Customer Age (in months)`, y= churn_avg_age)) +
+  geom_bar(stat = 'unique', fill = 'firebrick') +
+  geom_smooth(method='lm')+
+  labs(x = 'Customer Age', y = 'Average Churn', title = 'Average Customer Churn by Age') +
+  scale_x_continuous(limits= c(0, 70))
+
+
+```
+
+### Create a graph summarizing the number of customers who churn by customer age.
+Bar graph shows up to age 50 as ages past 47 show no churn.
+```{r, warning=FALSE, message=FALSE}
+qwe_data %>% 
+  ggplot(aes(x= `Customer Age (in months)`, y= `Churn (1 = Yes, 0 = No)`)) +
+  geom_bar(stat = 'identity', fill = 'blue') +
+  labs(x = 'Customer Age', y = 'Churn Count', title = 'Customer Churn Count by Age') +
+  scale_x_continuous(limits= c(0, 50))+
+  scale_y_continuous(breaks = scales::pretty_breaks(n=13))
+```
+
+### What is the customer age in months with the highest average churn?
+The customer age in months with the highest average churn is 12 at .22 average churn.
+```{r}
+desc_avg_churn <- churn_avg %>% 
+  arrange(desc(churn_avg_age))
+
+head(desc_avg_churn, 5)
+  
+```
+
+### Is Wall's intuition that the churn rates depend on customer age confirmed by your graphs?
+The scatterplot below shows the coefficients of a generalized linear regression model based on Age to Churn Average. A look at this graph, the low r squared of the model, and the graphs above indicate that there is a slight significant dependence of age on churn.  
+```{r, message=FALSE}
+age_churn_lm <- glm(data=qwe_data, formula = `Churn (1 = Yes, 0 = No)`~`Customer Age (in months)`)
+summary(age_churn_lm)
+
+qwe_data <- left_join(qwe_data, churn_avg)
+
+ggplot(qwe_data, aes(x = `Customer Age (in months)`, y = churn_avg_age))+
+  geom_point()+
+  geom_smooth(method = 'lm', se = FALSE)
+```
+
+
+# Univariate Testing:
+```{r}
+hist(qwe_data$`Churn (1 = Yes, 0 = No)`)
+churn_model <- glm(`Churn (1 = Yes, 0 = No)`~ .-ID- no_churn - yes_churn-churn_avg_age, data=qwe_data, family='binomial')
+summary(churn_model)
+binom.test(x=6024, n=6347, p=.3, alternative="less")
+```
+
+### Based on univariate testing, which attributes are significant predictors of churn?  List them out by name.
+According to the glm above, significant predictors of churn may be:
+-CHI Score Month 0
+-CHI Score 0-1
+-Days Since Last Login 0-1
+-Customer Age (in months)
+-Views 0-1
+
+# Logistic Regression:
+
+
+### Run a logistic regression predicting churn with all variables.
+Model was ran in the previous section without taking into account features created through this analysis as well as "ID" as that is a unique identifier for each row which does not repeat.
+```{r}
+summary(churn_model)
+```
+
+#### What is the AIC of the full model?
+```{r}
+print(paste("The AIC of the full model is:", round(churn_model$aic, 2)))
+```
+
+### Reduce the model to only include variables you find consequential.
+```{r}
+reduce_model <- glm(data = qwe_data, formula = `Churn (1 = Yes, 0 = No)`~ 
+                      `CHI Score Month 0`+ 
+                      `CHI Score 0-1`+ 
+                      `Days Since Last Login 0-1`+ 
+                      `Customer Age (in months)`+ 
+                      `Views 0-1`, family=binomial(link='logit'))
+```
+
+#### List the variables that are included.
+Chosen variables are similar to those from the univariate testing section.
+-CHI Score Month 0
+-CHI Score 0-1
+-Days Since Last Login 0-1
+-Customer Age (in months)
+-Views 0-1
+
+#### What is the AIC of the reduced model you came up with?
+```{r}
+print(paste("The AIC of the reduced model is:", round(reduce_model$aic, 2)))
+```
+
+### Does the AIC value of the reduced model align with your expectations?  Why or why not?
+I expected the AIC to drop significantly. With only a drop of about 5, reducing the model does not significantly improve the model based on AIC even though we only included consequential variables. 
+## Prep for predictions
+Using liberal prediction threshold due to nature of what we are predicting for.
+```{r}
+preds <- predict.glm(reduce_model, newdata=qwe_data, type='response')
+qwe_data$predicted_churn <- if_else(preds>=.3, 'Yes (1)', 'No (0)')
+qwe_data$predicted_values <- preds
+```
+
+### What is the predicted probability that customer 1023 will leave?  Is that high or low?  Did the customer leave?
+At .02 the predicted probability is low. The customer did not leave as predicted.
+```{r}
+qwe_data %>% 
+  select(ID, `Customer Age (in months)`, `Churn (1 = Yes, 0 = No)`, predicted_churn, predicted_values) %>% 
+  filter(ID==1023)
+```
+
+### What is the predicted probability that customer 3769 will leave?  Is that high or low?  Did the customer leave?
+At .08 the predicted probability is low. The customer did leave. This was not predicted.
+```{r}
+qwe_data %>% 
+  select(ID, `Customer Age (in months)`, `Churn (1 = Yes, 0 = No)`, predicted_churn, predicted_values) %>% 
+  filter(ID==3769)
+```
+
+### What is the predicted probability that customer 4168 will leave?  Is that high or low?  Did the customer leave?
+At .06 the predicted probability is low. The customer did not leave as predicted.
+```{r}
+qwe_data %>% 
+  select(ID, `Customer Age (in months)`, `Churn (1 = Yes, 0 = No)`, predicted_churn, predicted_values) %>% 
+  filter(ID==4168)
+```
+
+### What is the predicted probability that customer 357 will leave?  Is that high or low?  Did the customer leave?
+At .3 the predicted probability is high (based on the set threshold). The customer did leave as predicted.
+```{r}
+qwe_data %>% 
+  select(ID, `Customer Age (in months)`, `Churn (1 = Yes, 0 = No)`, predicted_churn, predicted_values) %>% 
+  filter(ID==357)
+```
+
+
+# Subset the data per Wall's intuition and re-run the analysis in section 3 above.  Your output should include the AIC of the full and reduced models, the predicted probability for customers 1023, 3769, 4168, and 357, and summary comments.
+Wall's intuition from the reading states he believed the following factors could be used to predict churn: age (0-6mo learners, 6mo-14mo is riskiest, >14mo probably least likely), CHI (particularly low CHI and those who have dropped score recently), service (many service requests and high priority requests most likely) and usage (less logs, less blogs, and less views). All final prediction values of old models ran on new subset plus new models created below will follow the final predictions table. Although Wall predicted Age range of 6-14 months, subset includes a range of 4-18 so that all four customers above will be included in the subset.
+```{r}
+subset_segment <- qwe_data$`Customer Age (in months)` >= 6 & qwe_data$`Customer Age (in months)` <= 14
+
+young_seg <- qwe_data$`Customer Age (in months)` < 6
+
+old_seg <- qwe_data$`Customer Age (in months)` >14
+
+churn_subset <- qwe_data[subset_segment, ]
+
+sub2 <- qwe_data[young_seg, ]
+
+sub3 <- qwe_data[old_seg, ]
+```
+
+```{r, warning=FALSE}
+new_reduce_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~ 
+                      `CHI Score Month 0`+ 
+                      `CHI Score 0-1`+ 
+                      `Days Since Last Login 0-1`+ 
+                      `Customer Age (in months)`+ 
+                      `Views 0-1`, family=binomial(link='logit'))
+
+new_churn_model <- glm(`Churn (1 = Yes, 0 = No)`~ .-ID- no_churn - yes_churn-churn_avg_age, data=churn_subset, family='binomial')
+
+new_reduce_model$aic
+new_churn_model$aic
+```
+
+# Based on the model you think performs the best:
+```{r, warning=FALSE}
+age_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~`Customer Age (in months)`, family=binomial(link='logit'))
+
+CHI_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~ `CHI Score Month 0`, family=binomial(link='logit'))
+
+CHIchange_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~ `CHI Score 0-1`, family=binomial(link='logit'))
+
+service_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~`Support Cases Month 0`, family=binomial(link='logit'))
+
+priority_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~`SP Month 0`, family=binomial(link='logit'))
+
+login_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~`Logins 0-1`, family=binomial(link='logit'))
+
+blog_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~`Blog Articles 0-1`, family=binomial(link='logit'))
+
+views_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~`Views 0-1`, family=binomial(link='logit'))
+
+Wall_model <- glm(data = churn_subset, formula = `Churn (1 = Yes, 0 = No)`~`CHI Score Month 0`+`CHI Score 0-1`+`Logins 0-1`+`Customer Age (in months)`+`Views 0-1`+`Support Cases Month 0`+`SP Month 0`+`Blog Articles 0-1`, family=binomial(link='logit'))
+
+AIC_table <- data.frame(Model=c('new_reduce_model', 'new_churn_model','age_model', 'CHI_model', 'CHIchange_model', 'service_model', 'priority_model', 'login_model', 'blog_model', 'views_model', 'Wall_model', 'churn_model', 'reduce_model'), AIC=c(new_reduce_model$aic, new_churn_model$aic, age_model$aic,CHI_model$aic,CHIchange_model$aic, service_model$aic, priority_model$aic, login_model$aic, blog_model$aic, views_model$aic, Wall_model$aic, churn_model$aic, reduce_model$aic))
+
+AIC_table[order(AIC_table$AIC,decreasing=FALSE),]
+```
+
+```{r}
+age_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~`Customer Age (in months)`, family=binomial(link='logit'))
+
+CHI_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~ `CHI Score Month 0`, family=binomial(link='logit'))
+
+CHIchange_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~ `CHI Score 0-1`, family=binomial(link='logit'))
+
+service_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~`Support Cases Month 0`, family=binomial(link='logit'))
+
+priority_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~`SP Month 0`, family=binomial(link='logit'))
+
+login_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~`Logins 0-1`, family=binomial(link='logit'))
+
+blog_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~`Blog Articles 0-1`, family=binomial(link='logit'))
+
+views_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~`Views 0-1`, family=binomial(link='logit'))
+
+Wall_model2 <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~`CHI Score Month 0`+`CHI Score 0-1`+`Logins 0-1`+`Customer Age (in months)`+`Views 0-1`+`Support Cases Month 0`+`SP Month 0`+`Blog Articles 0-1`, family=binomial(link='logit'))
+
+new_young_reduce_model <- glm(data = sub2, formula = `Churn (1 = Yes, 0 = No)`~ 
+                      `CHI Score Month 0`+ 
+                      `CHI Score 0-1`+ 
+                      `Days Since Last Login 0-1`+ 
+                      `Customer Age (in months)`+ 
+                      `Views 0-1`, family=binomial(link='logit'))
+
+#new_young_churn_model <- glm(`Churn (1 = Yes, 0 = No)`~ .-ID- no_churn - yes_churn- churn_avg_age, data= sub2, family='binomial')
+
+new_young_reduce_model$aic
+#new_young_churn_model$aic
+
+AIC_table2 <- data.frame(Model=c('new_young_reduce', 'age_model2', 'CHI_model2', 'CHIchange_model2', 'service_model2', 'priority_model2', 'login_model2', 'blog_model2', 'views_model2', 'Wall_model2', 'churn_model', 'reduce_model'), AIC=c(new_young_reduce_model$aic,age_model2$aic,CHI_model2$aic,CHIchange_model2$aic, service_model2$aic, priority_model2$aic, login_model2$aic, blog_model2$aic, views_model2$aic, Wall_model2$aic, churn_model$aic, reduce_model$aic))
+
+AIC_table2[order(AIC_table2$AIC,decreasing=FALSE),]
+```
+
+```{r}
+age_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~`Customer Age (in months)`, family=binomial(link='logit'))
+
+CHI_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~ `CHI Score Month 0`, family=binomial(link='logit'))
+
+CHIchange_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~ `CHI Score 0-1`, family=binomial(link='logit'))
+
+service_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~`Support Cases Month 0`, family=binomial(link='logit'))
+
+priority_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~`SP Month 0`, family=binomial(link='logit'))
+
+login_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~`Logins 0-1`, family=binomial(link='logit'))
+
+blog_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~`Blog Articles 0-1`, family=binomial(link='logit'))
+
+views_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~`Views 0-1`, family=binomial(link='logit'))
+
+Wall_model3 <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~`CHI Score Month 0`+`CHI Score 0-1`+`Logins 0-1`+`Customer Age (in months)`+`Views 0-1`+`Support Cases Month 0`+`SP Month 0`+`Blog Articles 0-1`, family=binomial(link='logit'))
+
+new_old_reduce_model <- glm(data = sub3, formula = `Churn (1 = Yes, 0 = No)`~ 
+                      `CHI Score Month 0`+ 
+                      `CHI Score 0-1`+ 
+                      `Days Since Last Login 0-1`+ 
+                      `Customer Age (in months)`+ 
+                      `Views 0-1`, family=binomial(link='logit'))
+
+new_old_churn_model <- glm(`Churn (1 = Yes, 0 = No)`~ .-ID- no_churn - yes_churn-churn_avg_age, data=sub3, family='binomial')
+
+new_old_reduce_model$aic
+new_old_churn_model$aic
+
+AIC_table3 <- data.frame(Model=c('new_old_reduce','new_old_churn', 'age_model3', 'CHI_model3', 'CHIchange_model3', 'service_model3', 'priority_model3', 'login_model3', 'blog_model3', 'views_model3', 'Wall_model3', 'churn_model', 'reduce_model'), AIC=c(new_old_reduce_model$aic,new_old_churn_model$aic,age_model3$aic,CHI_model3$aic,CHIchange_model3$aic, service_model3$aic, priority_model3$aic, login_model3$aic, blog_model3$aic, views_model3$aic, Wall_model3$aic, churn_model$aic, reduce_model$aic))
+
+AIC_table3[order(AIC_table3$AIC,decreasing=FALSE),]
+```
+
+
+
+```{r}
+added_predictions <- churn_subset %>% 
+  mutate(reduce_predict=predicted_values) %>% 
+  mutate(new_reduce_predict=predict.glm(new_reduce_model, newdata=churn_subset, type='response')) %>% 
+  mutate(churn_predict=predict.glm(churn_model, newdata=churn_subset, type='response')) %>% 
+  mutate(new_churn_predict=predict.glm(new_churn_model, newdata=churn_subset, type='response')) %>%
+  mutate(Wall_predict=predict.glm(Wall_model, newdata=churn_subset, type='response')) %>% 
+  mutate(CHI_predict=predict.glm(CHI_model, newdata=churn_subset, type='response')) 
+
+final_predictions <-added_predictions %>% 
+  select(ID,`Churn (1 = Yes, 0 = No)`, reduce_predict,new_reduce_predict, churn_predict, new_churn_predict, Wall_predict, CHI_predict)
+
+final_predictions %>% filter(ID %in% c(1023, 3769, 4168, 357))
+```
+Although we took a subset, the new_churn_model seems to be the only model that performs significantly well in terms of predictability accuracy.
+
+
+### Which 10 customers are the most likely to churn?
+```{r}
+final_predictions %>% 
+  select(ID, new_churn_predict) %>% 
+  arrange(desc(new_churn_predict)) %>% 
+  slice_head(n=10)
+
+final_predictions %>% 
+  select(ID, new_reduce_predict) %>% 
+  arrange(desc(new_reduce_predict)) %>% 
+  slice_head(n=10)
+
+final_predictions %>% 
+  select(ID, Wall_predict) %>% 
+  arrange(desc(Wall_predict)) %>% 
+  slice_head(n=10)
+```
+
+### What is their predicted probability of churn?
+Probability of churn are as follows (rounded):
+357- 100%
+1672- 46%
+1616- 43%
+1574- 43%
+299- 42%
+2546- 41%
+1693- 39%
+1021- 35%
+335- 33%
+1563- 33%
+
+### Did they churn?
+```{r}
+final_predictions %>% 
+  select(ID, new_churn_predict, `Churn (1 = Yes, 0 = No)`) %>% 
+  arrange(desc(new_churn_predict)) %>% 
+  slice_head(n=10)
+
+final_predictions %>% 
+  select(ID, new_reduce_predict, `Churn (1 = Yes, 0 = No)`) %>% 
+  arrange(desc(new_reduce_predict)) %>% 
+  slice_head(n=10)
+
+final_predictions %>% 
+  select(ID, Wall_predict, `Churn (1 = Yes, 0 = No)`) %>% 
+  arrange(desc(Wall_predict)) %>% 
+  slice_head(n=10)
+```
+357- Yes
+1672- Yes
+1616- No
+1574- No
+299- Yes
+2546- No
+1693- No
+1021- Yes
+335- Yes
+1563- Yes
+
+### Why did you select your solution?
+I chose the original model ran against the subset data as it seemed to perform the best against the four sample customers. It also had the best AIC and coefficients upon review. This model may have performed best as it included all features (except ID and any I manipulatively created through analysis). Since no features seemed to have any strong correlation with Churn, the use of all seemed to strengthen the model's performance.
+
+# Extras
+### Visualization
+```{r}
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`CHI Score Month 0`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  labs(title = "CHI Score and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "Current CHI Score")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`Customer Age (in months)`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  labs(title = "Customer Time with QWE and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "Customer Age in Months")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`CHI Score 0-1`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  labs(title = "CHI Score 1 Month Change and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "CHI Score Change")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`Support Cases 0-1`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  labs(title = "Service Count Mo 0-1 and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "December Service Count")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`Support Cases Month 0`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  labs(title = "Service Count December and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "December Service Count")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`SP Month 0`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  labs(title = "Service Priority December and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "December Service Priority")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`Logins 0-1`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  coord_cartesian(ylim=c(-10,50))+
+  labs(title = "Login Count and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "Login Count")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`Blog Articles 0-1`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  coord_cartesian(ylim=c(-10,10))+
+  labs(title = "Change in Blogs Written and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "1 Month Change in Blog Articles Written")
+
+qwe_data %>% 
+  ggplot(aes(x=as.factor(`Churn (1 = Yes, 0 = No)`),y=`Views 0-1`,fill=`Churn (1 = Yes, 0 = No)`))+
+  geom_boxplot(alpha=.5, width=.3, position="identity", show.legend = FALSE)+
+  coord_cartesian(ylim=c(-50,50))+
+  labs(title = "Change in Viewership and Churn Outcomes",x="Churn Outcomes (1=Yes, 0=No)",y = "1 Month Views Change")
+```
+
