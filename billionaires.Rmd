@@ -1,0 +1,267 @@
+---
+title: "Can Billionaires help the global poverty issue?"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+```
+
+Using the Billionaires data from Kaggle (https://www.kaggle.com/datasets/nelgiriyewithana/billionaires-statistics-dataset), I initially wanted to figure out how much would each person get if billionaires pooled their money and dispersed to everyone in the country they live in. This lead me to solve another question, though. I wanted to try and solve the age old question of could billionaires truly solve the world's poverty situation. 
+
+To do this, I decided to use the upper mid range of the poverty line which is calculated as $6.85 per person per day to spend. In my opinion, this is still an incredibly low quality of life. I also decided that each billionaire would keep $200,000,000 and be responsible for the country in which they have citizenship. This way, we could see exactly which country this would help most and which it would help least. 
+
+I also brought in two other datasets and had to find some one off's for poverty data of specific countries in order to fill in missing or supporting data. One was poverty data from GitHub (https://github.com/owid/poverty-data/tree/main/datasets) and the other was GDP data from the IMF (https://www.imf.org/external/datamapper/datasets). One off data is cited as code comments.
+
+```{r, message=FALSE, warning=FALSE}
+bills <-read_csv("C://Users/aoste/Downloads/Billionaires Statistics Dataset.csv")
+
+bills$gdp_country <- gsub("[$,]","", bills$gdp_country)
+
+options(scipen = 999)
+bills <- bills %>% 
+  mutate(finalWorth = finalWorth*1000000, gdp_country = as.numeric(gdp_country))
+
+gdp_by_c <- bills %>% 
+  group_by(country) %>% 
+  summarise(gdp_citizenship=gdp_country) %>% 
+  unique()
+
+bills <- inner_join(bills, gdp_by_c, by=c('countryOfCitizenship' = 'country'))
+
+head(bills, 10)
+```
+
+```{r, message=FALSE, warning=FALSE}
+gdp_imf <- read_excel("C://Users/aoste/Downloads/imf-dm-export-20231024 (1).xls")
+
+gdp_imf <- gdp_imf[,c('GDP, current prices (Billions of U.S. dollars)', '2023')]
+
+gdp_imf <- gdp_imf %>% 
+  rename(gdp_country2 = '2023', country = `GDP, current prices (Billions of U.S. dollars)`) %>% 
+  mutate(gdp_country2 = as.numeric(gdp_country2)) %>% 
+  mutate(gdp_country2 = gdp_country2 * 1000000000) %>% 
+  mutate(gdp_citizenship2 = gdp_country2)
+
+gdp_imf$country <- recode(gdp_imf$country, `Hong Kong SAR` = 'Hong Kong', 
+                          `Taiwan Province of China` = 'Taiwan',
+                          `Russian Federation` = 'Russia',
+                          `China, People's Republic of` = 'China',
+                          Eswatini = 'Eswatini (Swaziland)',
+                          `Bahamas, The` = 'Bahamas',
+                          `Türkiye, Republic of` = 'Turkey',
+                          `Slovak Republic` = 'Slovakia')
+head(gdp_imf, 10)
+```
+
+```{r, message=FALSE, warning=FALSE}
+pops <- read_csv('C://Users/aoste/Downloads/export.csv')
+
+pops <- pops %>% 
+  separate(`name;slug;value;date_of_information;ranking;region`, into = c('country', 'country2', 'population_country', 'date_info', 'ranking', 'region'), sep = ';')
+
+pops$country <- recode(pops$country, Eswatini = 'Eswatini (Swaziland)',
+                          `Bahamas, The` = 'Bahamas',
+                          `Turkey (Turkiye)` = 'Turkey',
+                          Czechia = 'Czech Republic',
+                          `Korea, South` = 'South Korea')
+pops$population_country <- gsub(',', '', pops$population_country)
+pops$population_country <- as.numeric(pops$population_country)
+
+head(pops, 10)
+```
+
+```{r, message=FALSE, warning=FALSE}
+poverty <- read_csv('C://Users/aoste/Downloads/pip_dataset.csv')
+
+poverty <- poverty %>% 
+  group_by(country) %>% 
+  filter(year == max(year), ppp_version == max(ppp_version))
+
+poverty$country <- recode(poverty$country, Czechia = 'Czech Republic',
+                          Eswatini = 'Eswatini (Swaziland)')
+head(poverty, 10)
+```
+
+```{r, message=FALSE, warning=FALSE}
+bills %>%
+  group_by(country) %>% 
+  mutate(total_sum = sum(finalWorth)) %>% 
+  summarise(percent_gdp = round(total_sum/gdp_country*100, 2)) %>% 
+  arrange(desc(percent_gdp)) %>% 
+  unique()
+
+bills %>%
+  group_by(countryOfCitizenship) %>% 
+  mutate(total_sum = sum(finalWorth)) %>% 
+  summarise(percent_gdp = round(total_sum/gdp_citizenship*100, 2)) %>% 
+  arrange(desc(percent_gdp)) %>% 
+  unique()
+
+bills %>% summarize(count = (country != countryOfCitizenship)) %>% count(count)
+```
+
+```{r, message=FALSE, warning=FALSE}
+analyze <- bills %>% 
+  select(personName,finalWorth, country, countryOfCitizenship, gdp_country, gdp_citizenship, population_country)
+
+birth_country <- analyze %>% 
+  left_join(gdp_imf, by = c('country'='country')) %>% 
+  unique() %>% 
+  select(-c(countryOfCitizenship,gdp_citizenship, gdp_citizenship2))
+
+citizen_country <- analyze %>% 
+  left_join(gdp_imf, by = c('countryOfCitizenship'='country')) %>% 
+  unique() %>% 
+  select(-c(country,gdp_country, gdp_country2))
+
+birth_country <- birth_country %>% 
+  mutate(gdp_country2 = ifelse(is.na(gdp_country2), gdp_country, gdp_country2))
+citizen_country <- citizen_country %>% 
+  mutate(gdp_citizenship2 = ifelse(is.na(gdp_citizenship2), gdp_citizenship, gdp_citizenship2))
+
+birth_country <- birth_country %>% 
+  mutate(gdp_country = ifelse(is.na(gdp_country), gdp_country2, gdp_country))
+citizen_country <- citizen_country %>% 
+  mutate(gdp_citizenship = ifelse(is.na(gdp_citizenship), gdp_citizenship2, gdp_citizenship))
+
+birth_percent_gdp <- birth_country %>% 
+    group_by(country) %>% 
+    mutate(total_sum = sum(finalWorth)) %>% 
+    summarise(percent_gdp = round(total_sum/gdp_country*100, 2)) %>% 
+    arrange(desc(percent_gdp)) %>% 
+    unique()
+
+citizenship_percent_gdp <- citizen_country %>% 
+    group_by(countryOfCitizenship) %>% 
+    mutate(total_sum = sum(finalWorth)) %>% 
+    summarise(percent_gdp = round(total_sum/gdp_citizenship*100, 2)) %>% 
+    arrange(desc(percent_gdp)) %>% 
+    unique()
+
+head(birth_percent_gdp)
+head(citizenship_percent_gdp)
+```
+
+```{r, message=FALSE, warning=FALSE}
+birth_country <- birth_country %>% 
+  left_join(pops, by = c('country'='country')) %>% 
+  select(-c(country2, date_info, ranking, region))
+
+citizen_country <- citizen_country %>% 
+  left_join(pops, by = c('countryOfCitizenship'='country')) %>% 
+  select(-c(country2, date_info, ranking, region))
+
+birth_country <- birth_country %>% 
+  mutate(population_country.y = ifelse(is.na(population_country.y), population_country.x, population_country.y))
+citizen_country <- citizen_country %>% 
+  mutate(population_country.y = ifelse(is.na(population_country.y), population_country.x, population_country.y))
+
+birth_country <- birth_country %>% 
+  mutate(population_country.x = ifelse(is.na(population_country.x), population_country.y, population_country.x))
+citizen_country <- citizen_country %>% 
+  mutate(population_country.x = ifelse(is.na(population_country.x), population_country.y, population_country.x), population_country = population_country.y) %>% 
+  select(-c(population_country.x, population_country.y))
+
+head(birth_country)
+head(citizen_country)
+```
+
+```{r, message=FALSE, warning=FALSE}
+birth_country %>% 
+  group_by(country) %>% 
+  mutate(totalworth = sum(finalWorth)) %>% 
+  summarise(money_per_capita = round(totalworth/population_country.x, 2)) %>% 
+  arrange(desc(money_per_capita)) %>% 
+  unique()
+
+citizen_country %>% 
+  group_by(countryOfCitizenship) %>% 
+  mutate(totalworth = sum(finalWorth)) %>% 
+  summarise(money_per_capita = round(totalworth/population_country, 2)) %>% 
+  arrange(desc(money_per_capita)) %>% 
+  unique()
+```
+
+```{r, message=FALSE, warning=FALSE}
+poverty <- poverty %>% 
+  select(country, headcount_upper_mid_income_povline , headcount_lower_mid_income_povline , headcount_international_povline)
+
+citizen_country <- citizen_country %>% 
+  left_join(poverty, by = c('countryOfCitizenship' = 'country'))
+
+citizen_country$headcount_upper_mid_income_povline <- ifelse(citizen_country$countryOfCitizenship == 'Hong Kong', citizen_country$population_country*.199, citizen_country$headcount_upper_mid_income_povline) #https://www.cia.gov/the-world-factbook/countries/hong-kong/
+
+citizen_country$headcount_upper_mid_income_povline <- ifelse(citizen_country$countryOfCitizenship == 'Singapore', 387000, citizen_country$headcount_upper_mid_income_povline) #https://onesingapore.org/focus-areas/#:~:text=Singapore%20does%20not%20have%20an,Singaporeans%20is%20living%20in%20poverty.
+
+citizen_country$headcount_upper_mid_income_povline <- ifelse(citizen_country$countryOfCitizenship == 'New Zealand', citizen_country$population_country*.15, citizen_country$headcount_upper_mid_income_povline) #https://borgenproject.org/tag/poverty-in-new-zealand/
+
+citizen_country$headcount_upper_mid_income_povline <- ifelse(citizen_country$countryOfCitizenship == 'Oman', citizen_country$population_country*.101, citizen_country$headcount_upper_mid_income_povline)
+citizen_country$headcount_upper_mid_income_povline <- ifelse(citizen_country$countryOfCitizenship == 'Qatar', citizen_country$population_country*.004, citizen_country$headcount_upper_mid_income_povline)
+#https://www.unescwa.org/publications/policy-reforms-lift-three-million-gcc-nationals-poverty#:~:text=Oman%20and%20Saudi%20Arabia%20have,rate%20of%207.5%20per%20cent.
+
+citizen_country$headcount_upper_mid_income_povline <- ifelse(citizen_country$countryOfCitizenship == 'Monaco' | citizen_country$countryOfCitizenship == 'Liechtenstein', 0, citizen_country$headcount_upper_mid_income_povline)
+#Monaco and Liechtenstein state a zero percent poverty rate
+
+citizen_country$headcount_upper_mid_income_povline <- ifelse(citizen_country$countryOfCitizenship == 'Guernsey', citizen_country$population_country*.16, citizen_country$headcount_upper_mid_income_povline) #https://www.bristol.ac.uk/poverty/downloads/regionalpovertystudies/02_GLS-2.pdf
+
+citizen_country <- citizen_country %>% 
+  group_by(personName) %>% 
+  filter(n() == 1 | n() > 1 & headcount_upper_mid_income_povline == max(headcount_upper_mid_income_povline))
+
+head(citizen_country)
+```
+
+```{r, message=FALSE}
+beat_poverty <- citizen_country %>% 
+  group_by(countryOfCitizenship) %>% 
+  mutate(totalworth = sum(finalWorth)) %>%  
+  summarise(money_per_capita = round(totalworth/headcount_upper_mid_income_povline, 2)) %>% 
+  arrange(desc(money_per_capita)) %>% 
+  unique()
+beat_poverty
+```
+
+```{r, message=FALSE}
+options(repr.plot.width = 25)
+beat_poverty %>%
+    filter(money_per_capita < Inf & money_per_capita >= (365*6.85)) %>% 
+    head(20) %>% 
+    ggplot(aes(x = money_per_capita, y = reorder(countryOfCitizenship, money_per_capita)))+
+    geom_col(fill = 'steelblue') +
+    geom_text(aes(label = money_per_capita), size = 3, hjust = .6)+
+    labs(x = 'Money per Capita Under Poverty', y = 'Country')
+
+```
+
+```{r, include=FALSE}
+birth_country <- birth_country %>% 
+  left_join(poverty, by = c('country' = 'country'))
+
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Hong Kong', birth_country$population_country.x*.199, birth_country$headcount_upper_mid_income_povline)
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Bahamas', birth_country$population_country.x*.093, birth_country$headcount_upper_mid_income_povline)
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Bermuda', birth_country$population_country.x*.11, birth_country$headcount_upper_mid_income_povline)
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Cambodia', birth_country$population_country.x*.165, birth_country$headcount_upper_mid_income_povline)
+#https://www.cia.gov/the-world-factbook/field/population-below-poverty-line
+
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Singapore', 387000, birth_country$headcount_upper_mid_income_povline) #https://onesingapore.org/focus-areas/#:~:text=Singapore%20does%20not%20have%20an,Singaporeans%20is%20living%20in%20poverty.
+
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'New Zealand', birth_country$population_country.x*.15, birth_country$headcount_upper_mid_income_povline) #https://borgenproject.org/tag/poverty-in-new-zealand/
+
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Oman', birth_country$population_country.x*.101, birth_country$headcount_upper_mid_income_povline)
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Qatar', birth_country$population_country.x*.004, birth_country$headcount_upper_mid_income_povline)
+#https://www.unescwa.org/publications/policy-reforms-lift-three-million-gcc-nationals-poverty#:~:text=Oman%20and%20Saudi%20Arabia%20have,rate%20of%207.5%20per%20cent.
+
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Monaco' | birth_country$country == 'Liechtenstein', 0, birth_country$headcount_upper_mid_income_povline)
+#Monaco and Liechtenstein state a zero percent poverty rate
+
+birth_country$headcount_upper_mid_income_povline <- ifelse(birth_country$country == 'Guernsey', birth_country$population_country.x*.16, birth_country$headcount_upper_mid_income_povline) #https://www.bristol.ac.uk/poverty/downloads/regionalpovertystudies/02_GLS-2.pdf
+
+
+
+```
